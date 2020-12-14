@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from flask_appbuilder.models.sqla import Model
 from flask_appbuilder.security.sqla.models import User
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 class UpdateChartCommand(BaseCommand):
-    def __init__(self, user: User, model_id: int, data: Dict):
+    def __init__(self, user: User, model_id: int, data: Dict[str, Any]):
         self._actor = user
         self._model_id = model_id
         self._properties = data.copy()
@@ -58,8 +58,8 @@ class UpdateChartCommand(BaseCommand):
         return chart
 
     def validate(self) -> None:
-        exceptions = list()
-        dashboard_ids = self._properties.get("dashboards", [])
+        exceptions: List[ValidationError] = list()
+        dashboard_ids = self._properties.get("dashboards")
         owner_ids: Optional[List[int]] = self._properties.get("owners")
 
         # Validate if datasource_id is provided datasource_type is required
@@ -87,11 +87,12 @@ class UpdateChartCommand(BaseCommand):
             except ValidationError as ex:
                 exceptions.append(ex)
 
-        # Validate/Populate dashboards
-        dashboards = DashboardDAO.find_by_ids(dashboard_ids)
-        if len(dashboards) != len(dashboard_ids):
-            exceptions.append(DashboardsNotFoundValidationError())
-        self._properties["dashboards"] = dashboards
+        # Validate/Populate dashboards only if it's a list
+        if dashboard_ids is not None:
+            dashboards = DashboardDAO.find_by_ids(dashboard_ids)
+            if len(dashboards) != len(dashboard_ids):
+                exceptions.append(DashboardsNotFoundValidationError())
+            self._properties["dashboards"] = dashboards
 
         # Validate/Populate owner
         try:

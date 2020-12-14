@@ -16,6 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { ReactNode } from 'react';
+
 export interface SortColumn {
   id: string;
   desc?: boolean;
@@ -23,35 +25,68 @@ export interface SortColumn {
 
 export type SortColumns = SortColumn[];
 
-export interface Select {
+export interface SelectOption {
   label: string;
   value: any;
 }
 
+export interface CardSortSelectOption {
+  desc: boolean;
+  id: any;
+  label: string;
+  value: any;
+}
+
+type FilterOperator =
+  | 'sw'
+  | 'ew'
+  | 'ct'
+  | 'eq'
+  | 'nsw'
+  | 'new'
+  | 'nct'
+  | 'neq'
+  | 'gt'
+  | 'lt'
+  | 'rel_m_m'
+  | 'rel_o_m'
+  | 'title_or_slug'
+  | 'name_or_description'
+  | 'all_text'
+  | 'chart_all_text'
+  | 'dataset_is_null_or_empty'
+  | 'between';
+
 export interface Filter {
-  Header: string;
+  Header: ReactNode;
   id: string;
-  operators?: Select[];
-  operator?: string;
-  input?: 'text' | 'textarea' | 'select' | 'checkbox' | 'search';
+  operator?: FilterOperator;
+  input?:
+    | 'text'
+    | 'textarea'
+    | 'select'
+    | 'checkbox'
+    | 'search'
+    | 'datetime_range';
   unfilteredLabel?: string;
-  selects?: Select[];
+  selects?: SelectOption[];
   onFilterOpen?: () => void;
-  fetchSelects?: () => Promise<Select[]>;
+  fetchSelects?: (
+    filterValue?: string,
+    pageIndex?: number,
+    pageSize?: number,
+  ) => Promise<SelectOption[]>;
+  paginate?: boolean;
 }
 
 export type Filters = Filter[];
 
+export type ViewModeType = 'card' | 'table';
+
 export interface FilterValue {
   id: string;
   operator?: string;
-  value:
-    | string
-    | boolean
-    | number
-    | null
-    | undefined
-    | { datasource_id: number; datasource_type: string };
+  value: string | boolean | number | null | undefined | string[] | number[];
 }
 
 export interface FetchDataConfig {
@@ -65,18 +100,23 @@ export interface InternalFilter extends FilterValue {
   Header?: string;
 }
 
-export interface FilterOperatorMap {
-  [columnId: string]: Array<{
-    name: string;
-    operator:
-      | 'sw'
-      | 'ew'
-      | 'ct'
-      | 'eq'
-      | 'nsw'
-      | 'new'
-      | 'nct'
-      | 'neq'
-      | 'rel_m_m';
-  }>;
+export enum FilterOperators {
+  startsWith = 'sw',
+  endsWith = 'ew',
+  contains = 'ct',
+  equals = 'eq',
+  notStartsWith = 'nsw',
+  notEndsWith = 'new',
+  notContains = 'nct',
+  notEquals = 'neq',
+  greaterThan = 'gt',
+  lessThan = 'lt',
+  relationManyMany = 'rel_m_m',
+  relationOneMany = 'rel_o_m',
+  titleOrSlug = 'title_or_slug',
+  nameOrDescription = 'name_or_description',
+  allText = 'all_text',
+  chartAllText = 'chart_all_text',
+  datasetIsNullOrEmpty = 'dataset_is_null_or_empty',
+  between = 'between',
 }

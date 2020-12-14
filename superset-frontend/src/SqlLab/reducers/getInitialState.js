@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
+import { t } from '@superset-ui/core';
 import getToastsFromPyFlashMessages from '../../messageToasts/utils/getToastsFromPyFlashMessages';
 
 export default function getInitialState({
@@ -27,6 +27,7 @@ export default function getInitialState({
   databases,
   queries: queries_,
   requested_query: requestedQuery,
+  user,
 }) {
   /**
    * Before YYYY-MM-DD, the state for SQL Lab was stored exclusively in the
@@ -144,7 +145,7 @@ export default function getInitialState({
     localStorage.getItem('redux') &&
     JSON.parse(localStorage.getItem('redux')).sqlLab
   ) {
-    const sqlLab = JSON.parse(localStorage.getItem('redux')).sqlLab;
+    const { sqlLab } = JSON.parse(localStorage.getItem('redux'));
 
     if (sqlLab.queryEditors.length === 0) {
       // migration was successful
@@ -180,6 +181,7 @@ export default function getInitialState({
       tabHistory,
       tables,
       queriesLastUpdate: Date.now(),
+      user,
     },
     requestedQuery,
     messageToasts: getToastsFromPyFlashMessages(

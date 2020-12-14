@@ -16,7 +16,7 @@
 # under the License.
 import logging
 from collections import Counter
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from flask_appbuilder.models.sqla import Model
 from flask_appbuilder.security.sqla.models import User
@@ -48,17 +48,28 @@ logger = logging.getLogger(__name__)
 
 
 class UpdateDatasetCommand(BaseCommand):
-    def __init__(self, user: User, model_id: int, data: Dict):
+    def __init__(
+        self,
+        user: User,
+        model_id: int,
+        data: Dict[str, Any],
+        override_columns: bool = False,
+    ):
         self._actor = user
         self._model_id = model_id
         self._properties = data.copy()
         self._model: Optional[SqlaTable] = None
+        self.override_columns = override_columns
 
     def run(self) -> Model:
         self.validate()
         if self._model:
             try:
-                dataset = DatasetDAO.update(self._model, self._properties)
+                dataset = DatasetDAO.update(
+                    model=self._model,
+                    properties=self._properties,
+                    override_columns=self.override_columns,
+                )
                 return dataset
             except DAOUpdateFailedError as ex:
                 logger.exception(ex.exception)
@@ -66,7 +77,7 @@ class UpdateDatasetCommand(BaseCommand):
         raise DatasetUpdateFailedError()
 
     def validate(self) -> None:
-        exceptions = list()
+        exceptions: List[ValidationError] = list()
         owner_ids: Optional[List[int]] = self._properties.get("owners")
         # Validate/populate model exists
         self._model = DatasetDAO.find_by_id(self._model_id)
@@ -111,7 +122,7 @@ class UpdateDatasetCommand(BaseCommand):
             raise exception
 
     def _validate_columns(
-        self, columns: List[Dict], exceptions: List[ValidationError]
+        self, columns: List[Dict[str, Any]], exceptions: List[ValidationError]
     ) -> None:
         # Validate duplicates on data
         if self._get_duplicates(columns, "column_name"):
@@ -123,17 +134,19 @@ class UpdateDatasetCommand(BaseCommand):
             ]
             if not DatasetDAO.validate_columns_exist(self._model_id, columns_ids):
                 exceptions.append(DatasetColumnNotFoundValidationError())
+
             # validate new column names uniqueness
-            columns_names: List[str] = [
-                column["column_name"] for column in columns if "id" not in column
-            ]
-            if not DatasetDAO.validate_columns_uniqueness(
-                self._model_id, columns_names
-            ):
-                exceptions.append(DatasetColumnsExistsValidationError())
+            if not self.override_columns:
+                columns_names: List[str] = [
+                    column["column_name"] for column in columns if "id" not in column
+                ]
+                if not DatasetDAO.validate_columns_uniqueness(
+                    self._model_id, columns_names
+                ):
+                    exceptions.append(DatasetColumnsExistsValidationError())
 
     def _validate_metrics(
-        self, metrics: List[Dict], exceptions: List[ValidationError]
+        self, metrics: List[Dict[str, Any]], exceptions: List[ValidationError]
     ) -> None:
         if self._get_duplicates(metrics, "metric_name"):
             exceptions.append(DatasetMetricsDuplicateValidationError())
@@ -152,7 +165,7 @@ class UpdateDatasetCommand(BaseCommand):
                 exceptions.append(DatasetMetricsExistsValidationError())
 
     @staticmethod
-    def _get_duplicates(data: List[Dict], key: str) -> List[str]:
+    def _get_duplicates(data: List[Dict[str, Any]], key: str) -> List[str]:
         duplicates = [
             name
             for name, count in Counter([item[key] for item in data]).items()

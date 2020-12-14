@@ -19,7 +19,9 @@
 import cx from 'classnames';
 import React from 'react';
 import PropTypes from 'prop-types';
-import { exportChart } from '../../../explore/exploreUtils';
+import { styled } from '@superset-ui/core';
+
+import { exploreChart, exportChart } from '../../../explore/exploreUtils';
 import SliceHeader from '../SliceHeader';
 import ChartContainer from '../../../chart/ChartContainer';
 import MissingChart from '../MissingChart';
@@ -41,6 +43,7 @@ const propTypes = {
   height: PropTypes.number.isRequired,
   updateSliceName: PropTypes.func.isRequired,
   isComponentVisible: PropTypes.bool,
+  handleToggleFullSize: PropTypes.func.isRequired,
 
   // from redux
   chart: chartPropShape.isRequired,
@@ -80,7 +83,14 @@ const SHOULD_UPDATE_ON_PROP_CHANGES = Object.keys(propTypes).filter(
 const OVERFLOWABLE_VIZ_TYPES = new Set(['filter_box']);
 const DEFAULT_HEADER_HEIGHT = 22;
 
-class Chart extends React.Component {
+const ChartOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+`;
+
+export default class Chart extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
@@ -117,6 +127,12 @@ class Chart extends React.Component {
         return true;
       }
 
+      if (nextProps.isFullSize !== this.props.isFullSize) {
+        clearTimeout(this.resizeTimeout);
+        this.resizeTimeout = setTimeout(this.resize, RESIZE_TIMEOUT);
+        return false;
+      }
+
       for (let i = 0; i < SHOULD_UPDATE_ON_PROP_CHANGES.length; i += 1) {
         const prop = SHOULD_UPDATE_ON_PROP_CHANGES[i];
         if (nextProps[prop] !== this.props[prop]) {
@@ -133,7 +149,7 @@ class Chart extends React.Component {
       }
     }
 
-    // `cacheBusterProp` is nnjected by react-hot-loader
+    // `cacheBusterProp` is jected by react-hot-loader
     return this.props.cacheBusterProp !== nextProps.cacheBusterProp;
   }
 
@@ -182,8 +198,8 @@ class Chart extends React.Component {
     this.props.setFocusedFilterField(chartId, column);
   }
 
-  handleFilterMenuClose() {
-    this.props.unsetFocusedFilterField();
+  handleFilterMenuClose(chartId, column) {
+    this.props.unsetFocusedFilterField(chartId, column);
   }
 
   exploreChart() {
@@ -191,7 +207,7 @@ class Chart extends React.Component {
       slice_id: this.props.slice.slice_id,
       is_cached: this.props.isCached,
     });
-    exportChart(this.props.formData);
+    exploreChart(this.props.formData);
   }
 
   exportCSV() {
@@ -199,7 +215,11 @@ class Chart extends React.Component {
       slice_id: this.props.slice.slice_id,
       is_cached: this.props.isCached,
     });
-    exportChart(this.props.formData, 'csv');
+    exportChart({
+      formData: this.props.formData,
+      resultType: 'results',
+      resultFormat: 'csv',
+    });
   }
 
   forceRefresh() {
@@ -234,6 +254,8 @@ class Chart extends React.Component {
       supersetCanCSV,
       sliceCanEdit,
       addDangerToast,
+      handleToggleFullSize,
+      isFullSize,
     } = this.props;
 
     const { width } = this.state;
@@ -244,7 +266,8 @@ class Chart extends React.Component {
       return <MissingChart height={this.getChartHeight()} />;
     }
 
-    const { queryResponse, chartUpdateEndTime } = chart;
+    const { queryResponse, chartUpdateEndTime, chartStatus } = chart;
+    const isLoading = chartStatus === 'loading';
     const isCached = queryResponse && queryResponse.is_cached;
     const cachedDttm = queryResponse && queryResponse.cached_dttm;
     const isOverflowable = OVERFLOWABLE_VIZ_TYPES.has(slice.viz_type);
@@ -256,7 +279,7 @@ class Chart extends React.Component {
       : {};
 
     return (
-      <div>
+      <div className="chart-slice">
         <SliceHeader
           innerRef={this.setHeaderRef}
           slice={slice}
@@ -279,6 +302,9 @@ class Chart extends React.Component {
           dashboardId={dashboardId}
           filters={filters}
           addDangerToast={addDangerToast}
+          handleToggleFullSize={handleToggleFullSize}
+          isFullSize={isFullSize}
+          chartStatus={chart.chartStatus}
         />
 
         {/*
@@ -303,6 +329,15 @@ class Chart extends React.Component {
             isOverflowable && 'dashboard-chart--overflowable',
           )}
         >
+          {isLoading && (
+            <ChartOverlay
+              style={{
+                width,
+                height: this.getChartHeight(),
+              }}
+            />
+          )}
+
           <ChartContainer
             width={width}
             height={this.getChartHeight()}
@@ -312,7 +347,7 @@ class Chart extends React.Component {
             annotationData={chart.annotationData}
             chartAlert={chart.chartAlert}
             chartId={id}
-            chartStatus={chart.chartStatus}
+            chartStatus={chartStatus}
             datasource={datasource}
             dashboardId={dashboardId}
             initialValues={initialValues}
@@ -321,6 +356,7 @@ class Chart extends React.Component {
             timeout={timeout}
             triggerQuery={chart.triggerQuery}
             vizType={slice.viz_type}
+            owners={slice.owners}
           />
         </div>
       </div>
@@ -330,5 +366,3 @@ class Chart extends React.Component {
 
 Chart.propTypes = propTypes;
 Chart.defaultProps = defaultProps;
-
-export default Chart;

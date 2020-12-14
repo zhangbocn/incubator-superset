@@ -14,59 +14,214 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
-from marshmallow import fields, post_load, Schema, validate, ValidationError
-from marshmallow.validate import Length
+from flask_babel import gettext as _
+from marshmallow import fields, post_load, Schema, validate
+from marshmallow.validate import Length, Range
 
 from superset.common.query_context import QueryContext
-from superset.exceptions import SupersetException
-from superset.utils import core as utils
+from superset.utils import schema as utils
+from superset.utils.core import (
+    AnnotationType,
+    FilterOperator,
+    PostProcessingBoxplotWhiskerType,
+    PostProcessingContributionOrientation,
+)
 
+#
+# RISON/JSON schemas for query parameters
+#
 get_delete_ids_schema = {"type": "array", "items": {"type": "integer"}}
+
+width_height_schema = {
+    "type": "array",
+    "items": {"type": "integer"},
+}
 thumbnail_query_schema = {
     "type": "object",
     "properties": {"force": {"type": "boolean"}},
 }
+screenshot_query_schema = {
+    "type": "object",
+    "properties": {
+        "force": {"type": "boolean"},
+        "window_size": width_height_schema,
+        "thumb_size": width_height_schema,
+    },
+}
+get_export_ids_schema = {"type": "array", "items": {"type": "integer"}}
+
+get_fav_star_ids_schema = {"type": "array", "items": {"type": "integer"}}
+
+#
+# Column schema descriptions
+#
+slice_name_description = "The name of the chart."
+description_description = "A description of the chart propose."
+viz_type_description = "The type of chart visualization used."
+owners_description = (
+    "Owner are users ids allowed to delete or change this chart. "
+    "If left empty you will be one of the owners of the chart."
+)
+params_description = (
+    "Parameters are generated dynamically when clicking the save "
+    "or overwrite button in the explore view. "
+    "This JSON object for power users who may want to alter specific parameters."
+)
+cache_timeout_description = (
+    "Duration (in seconds) of the caching timeout "
+    "for this chart. Note this defaults to the datasource/table"
+    " timeout if undefined."
+)
+datasource_id_description = (
+    "The id of the dataset/datasource this new chart will use. "
+    "A complete datasource identification needs `datasouce_id` "
+    "and `datasource_type`."
+)
+datasource_uid_description = (
+    "The uid of the dataset/datasource this new chart will use. "
+    "A complete datasource identification needs `datasouce_uid` "
+)
+datasource_type_description = (
+    "The type of dataset/datasource identified on `datasource_id`."
+)
+datasource_name_description = "The datasource name."
+dashboards_description = "A list of dashboards to include this new chart to."
+
+#
+# OpenAPI method specification overrides
+#
+openapi_spec_methods_override = {
+    "get": {"get": {"description": "Get a chart detail information."}},
+    "get_list": {
+        "get": {
+            "description": "Get a list of charts, use Rison or JSON query "
+            "parameters for filtering, sorting, pagination and "
+            " for selecting specific columns and metadata.",
+        }
+    },
+    "info": {
+        "get": {
+            "description": "Several metadata information about chart API endpoints.",
+        }
+    },
+    "related": {
+        "get": {"description": "Get a list of all possible owners for a chart."}
+    },
+}
 
 
-def validate_json(value: Union[bytes, bytearray, str]) -> None:
-    try:
-        utils.validate_json(value)
-    except SupersetException:
-        raise ValidationError("JSON not valid")
+TIME_GRAINS = (
+    "PT1S",
+    "PT1M",
+    "PT5M",
+    "PT10M",
+    "PT15M",
+    "PT0.5H",
+    "PT1H",
+    "P1D",
+    "P1W",
+    "P1M",
+    "P0.25Y",
+    "P1Y",
+    "1969-12-28T00:00:00Z/P1W",  # Week starting Sunday
+    "1969-12-29T00:00:00Z/P1W",  # Week starting Monday
+    "P1W/1970-01-03T00:00:00Z",  # Week ending Saturday
+    "P1W/1970-01-04T00:00:00Z",  # Week ending Sunday
+)
 
 
 class ChartPostSchema(Schema):
-    slice_name = fields.String(required=True, validate=Length(1, 250))
-    description = fields.String(allow_none=True)
-    viz_type = fields.String(allow_none=True, validate=Length(0, 250))
-    owners = fields.List(fields.Integer())
-    params = fields.String(allow_none=True, validate=validate_json)
-    cache_timeout = fields.Integer(allow_none=True)
-    datasource_id = fields.Integer(required=True)
-    datasource_type = fields.String(required=True)
-    datasource_name = fields.String(allow_none=True)
-    dashboards = fields.List(fields.Integer())
+    """
+    Schema to add a new chart.
+    """
+
+    slice_name = fields.String(
+        description=slice_name_description, required=True, validate=Length(1, 250)
+    )
+    description = fields.String(description=description_description, allow_none=True)
+    viz_type = fields.String(
+        description=viz_type_description,
+        validate=Length(0, 250),
+        example=["bar", "line_multi", "area", "table"],
+    )
+    owners = fields.List(fields.Integer(description=owners_description))
+    params = fields.String(
+        description=params_description, allow_none=True, validate=utils.validate_json
+    )
+    cache_timeout = fields.Integer(
+        description=cache_timeout_description, allow_none=True
+    )
+    datasource_id = fields.Integer(description=datasource_id_description, required=True)
+    datasource_type = fields.String(
+        description=datasource_type_description,
+        validate=validate.OneOf(choices=("druid", "table", "view")),
+        required=True,
+    )
+    datasource_name = fields.String(
+        description=datasource_name_description, allow_none=True
+    )
+    dashboards = fields.List(fields.Integer(description=dashboards_description))
 
 
 class ChartPutSchema(Schema):
-    slice_name = fields.String(allow_none=True, validate=Length(0, 250))
-    description = fields.String(allow_none=True)
-    viz_type = fields.String(allow_none=True, validate=Length(0, 250))
-    owners = fields.List(fields.Integer())
-    params = fields.String(allow_none=True)
-    cache_timeout = fields.Integer(allow_none=True)
-    datasource_id = fields.Integer(allow_none=True)
-    datasource_type = fields.String(allow_none=True)
-    dashboards = fields.List(fields.Integer())
+    """
+    Schema to update or patch a chart
+    """
+
+    slice_name = fields.String(
+        description=slice_name_description, allow_none=True, validate=Length(0, 250)
+    )
+    description = fields.String(description=description_description, allow_none=True)
+    viz_type = fields.String(
+        description=viz_type_description,
+        allow_none=True,
+        validate=Length(0, 250),
+        example=["bar", "line_multi", "area", "table"],
+    )
+    owners = fields.List(fields.Integer(description=owners_description))
+    params = fields.String(description=params_description, allow_none=True)
+    cache_timeout = fields.Integer(
+        description=cache_timeout_description, allow_none=True
+    )
+    datasource_id = fields.Integer(
+        description=datasource_id_description, allow_none=True
+    )
+    datasource_type = fields.String(
+        description=datasource_type_description,
+        validate=validate.OneOf(choices=("druid", "table", "view")),
+        allow_none=True,
+    )
+    dashboards = fields.List(fields.Integer(description=dashboards_description))
+
+
+class ChartGetDatasourceObjectDataResponseSchema(Schema):
+    datasource_id = fields.Integer(description="The datasource identifier")
+    datasource_type = fields.Integer(description="The datasource type")
+
+
+class ChartGetDatasourceObjectResponseSchema(Schema):
+    label = fields.String(description="The name of the datasource")
+    value = fields.Nested(ChartGetDatasourceObjectDataResponseSchema)
+
+
+class ChartGetDatasourceResponseSchema(Schema):
+    count = fields.Integer(description="The total number of datasources")
+    result = fields.Nested(ChartGetDatasourceObjectResponseSchema)
+
+
+class ChartCacheScreenshotResponseSchema(Schema):
+    cache_key = fields.String(description="The cache key")
+    chart_url = fields.String(description="The url to render the chart")
+    image_url = fields.String(description="The url to fetch the screenshot")
 
 
 class ChartDataColumnSchema(Schema):
     column_name = fields.String(
         description="The name of the target column", example="mycol",
     )
-    type = fields.String(description="Type of target column", example="BIGINT",)
+    type = fields.String(description="Type of target column", example="BIGINT")
 
 
 class ChartDataAdhocMetricSchema(Schema):
@@ -82,7 +237,6 @@ class ChartDataAdhocMetricSchema(Schema):
     )
     aggregate = fields.String(
         description="Aggregation operator. Only required for simple expression types.",
-        required=False,
         validate=validate.OneOf(
             choices=("AVG", "COUNT", "COUNT_DISTINCT", "MAX", "MIN", "SUM")
         ),
@@ -91,27 +245,23 @@ class ChartDataAdhocMetricSchema(Schema):
     sqlExpression = fields.String(
         description="The metric as defined by a SQL aggregate expression. "
         "Only required for SQL expression type.",
-        required=False,
         example="SUM(weight * observations) / SUM(weight)",
     )
     label = fields.String(
         description="Label for the metric. Is automatically generated unless "
         "hasCustomLabel is true, in which case label must be defined.",
-        required=False,
         example="Weighted observations",
     )
     hasCustomLabel = fields.Boolean(
         description="When false, the label will be automatically generated based on "
         "the aggregate expression. When true, a custom label has to be "
         "specified.",
-        required=False,
         example=True,
     )
     optionName = fields.String(
         description="Unique identifier. Can be any string value, as long as all "
         "metrics have a unique identifier. If undefined, a random name "
         "will be generated.",
-        required=False,
         example="metric_aec60732-fac0-4b17-b736-93f1a5c93e30",
     )
 
@@ -142,8 +292,7 @@ class ChartDataAggregateConfigField(fields.Dict):
 
 
 class ChartDataPostProcessingOperationOptionsSchema(Schema):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    pass
 
 
 class ChartDataAggregateOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
@@ -195,6 +344,7 @@ class ChartDataRollingOptionsSchema(ChartDataPostProcessingOperationOptionsSchem
                 "nanmax",
                 "nanmean",
                 "nanmedian",
+                "nanpercentile",
                 "min",
                 "percentile",
                 "prod",
@@ -213,12 +363,10 @@ class ChartDataRollingOptionsSchema(ChartDataPostProcessingOperationOptionsSchem
     rolling_type_options = fields.Dict(
         desctiption="Optional options to pass to rolling method. Needed for "
         "e.g. quantile operation.",
-        required=False,
         example={},
     )
     center = fields.Boolean(
         description="Should the label be at the center of the window. Default: `false`",
-        required=False,
         example=False,
     )
     win_type = fields.String(
@@ -228,7 +376,6 @@ class ChartDataRollingOptionsSchema(ChartDataPostProcessingOperationOptionsSchem
         "for more details. Some window functions require passing "
         "additional parameters to `rolling_type_options`. For instance, "
         "to use `gaussian`, the parameter `std` needs to be provided.",
-        required=False,
         validate=validate.OneOf(
             choices=(
                 "boxcar",
@@ -252,7 +399,6 @@ class ChartDataRollingOptionsSchema(ChartDataPostProcessingOperationOptionsSchem
     min_periods = fields.Integer(
         description="The minimum amount of periods required for a row to be included "
         "in the result set.",
-        required=False,
         example=7,
     )
 
@@ -265,9 +411,14 @@ class ChartDataSelectOptionsSchema(ChartDataPostProcessingOperationOptionsSchema
     columns = fields.List(
         fields.String(),
         description="Columns which to select from the input data, in the desired "
-        "order. If columns are renamed, the old column name should be "
+        "order. If columns are renamed, the original column name should be "
         "referenced here.",
         example=["country", "gender", "age"],
+    )
+    exclude = fields.List(
+        fields.String(),
+        description="Columns to exclude from selection.",
+        example=["my_temp_column"],
     )
     rename = fields.List(
         fields.Dict(),
@@ -291,6 +442,142 @@ class ChartDataSortOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
     aggregates = ChartDataAggregateConfigField()
 
 
+class ChartDataContributionOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
+    """
+    Contribution operation config.
+    """
+
+    orientation = fields.String(
+        description="Should cell values be calculated across the row or column.",
+        required=True,
+        validate=validate.OneOf(
+            choices=[val.value for val in PostProcessingContributionOrientation]
+        ),
+        example="row",
+    )
+
+
+class ChartDataProphetOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
+    """
+    Prophet operation config.
+    """
+
+    time_grain = fields.String(
+        description="Time grain used to specify time period increments in prediction. "
+        "Supports [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601#Durations) "
+        "durations.",
+        validate=validate.OneOf(choices=TIME_GRAINS),
+        example="P1D",
+        required=True,
+    )
+    periods = fields.Integer(
+        descrption="Time periods (in units of `time_grain`) to predict into the future",
+        min=1,
+        example=7,
+        required=True,
+    )
+    confidence_interval = fields.Float(
+        description="Width of predicted confidence interval",
+        validate=[
+            Range(
+                min=0,
+                max=1,
+                min_inclusive=False,
+                max_inclusive=False,
+                error=_("`confidence_interval` must be between 0 and 1 (exclusive)"),
+            )
+        ],
+        example=0.8,
+        required=True,
+    )
+    yearly_seasonality = fields.Raw(
+        # TODO: add correct union type once supported by Marshmallow
+        description="Should yearly seasonality be applied. "
+        "An integer value will specify Fourier order of seasonality, `None` will "
+        "automatically detect seasonality.",
+        example=False,
+    )
+    weekly_seasonality = fields.Raw(
+        # TODO: add correct union type once supported by Marshmallow
+        description="Should weekly seasonality be applied. "
+        "An integer value will specify Fourier order of seasonality, `None` will "
+        "automatically detect seasonality.",
+        example=False,
+    )
+    monthly_seasonality = fields.Raw(
+        # TODO: add correct union type once supported by Marshmallow
+        description="Should monthly seasonality be applied. "
+        "An integer value will specify Fourier order of seasonality, `None` will "
+        "automatically detect seasonality.",
+        example=False,
+    )
+
+
+class ChartDataBoxplotOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
+    """
+    Boxplot operation config.
+    """
+
+    groupby = fields.List(
+        fields.String(description="Columns by which to group the query.",),
+        allow_none=True,
+    )
+
+    metrics = fields.List(
+        fields.Raw(),
+        description="Aggregate expressions. Metrics can be passed as both "
+        "references to datasource metrics (strings), or ad-hoc metrics"
+        "which are defined only within the query object. See "
+        "`ChartDataAdhocMetricSchema` for the structure of ad-hoc metrics.",
+    )
+
+    whisker_type = fields.String(
+        description="Whisker type. Any numpy function will work.",
+        validate=validate.OneOf(
+            choices=([val.value for val in PostProcessingBoxplotWhiskerType])
+        ),
+        required=True,
+        example="tukey",
+    )
+
+    percentiles = fields.Tuple(
+        (
+            fields.Float(
+                description="Lower percentile",
+                validate=[
+                    Range(
+                        min=0,
+                        max=100,
+                        min_inclusive=False,
+                        max_inclusive=False,
+                        error=_(
+                            "lower percentile must be greater than 0 and less "
+                            "than 100. Must be lower than upper percentile."
+                        ),
+                    ),
+                ],
+            ),
+            fields.Float(
+                description="Upper percentile",
+                validate=[
+                    Range(
+                        min=0,
+                        max=100,
+                        min_inclusive=False,
+                        max_inclusive=False,
+                        error=_(
+                            "upper percentile must be greater than 0 and less "
+                            "than 100. Must be higher than lower percentile."
+                        ),
+                    ),
+                ],
+            ),
+        ),
+        description="Upper and lower percentiles for percentile whisker type.",
+        example=[1, 99],
+    )
+
+
 class ChartDataPivotOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
     """
     Pivot operation config.
@@ -310,29 +597,83 @@ class ChartDataPivotOptionsSchema(ChartDataPostProcessingOperationOptionsSchema)
         fields.String(
             allow_none=False, description="Columns to group by on the table columns",
         ),
-        minLength=1,
-        required=True,
     )
     metric_fill_value = fields.Number(
-        required=False,
         description="Value to replace missing values with in aggregate calculations.",
     )
     column_fill_value = fields.String(
-        required=False, description="Value to replace missing pivot columns names with."
+        description="Value to replace missing pivot columns names with."
     )
     drop_missing_columns = fields.Boolean(
         description="Do not include columns whose entries are all missing "
         "(default: `true`).",
-        required=False,
     )
     marginal_distributions = fields.Boolean(
-        description="Add totals for row/column. (default: `false`)", required=False,
+        description="Add totals for row/column. (default: `false`)",
     )
     marginal_distribution_name = fields.String(
         description="Name of marginal distribution row/column. (default: `All`)",
-        required=False,
     )
     aggregates = ChartDataAggregateConfigField()
+
+
+class ChartDataGeohashDecodeOptionsSchema(
+    ChartDataPostProcessingOperationOptionsSchema
+):
+    """
+    Geohash decode operation config.
+    """
+
+    geohash = fields.String(
+        description="Name of source column containing geohash string", required=True,
+    )
+    latitude = fields.String(
+        description="Name of target column for decoded latitude", required=True,
+    )
+    longitude = fields.String(
+        description="Name of target column for decoded longitude", required=True,
+    )
+
+
+class ChartDataGeohashEncodeOptionsSchema(
+    ChartDataPostProcessingOperationOptionsSchema
+):
+    """
+    Geohash encode operation config.
+    """
+
+    latitude = fields.String(
+        description="Name of source latitude column", required=True,
+    )
+    longitude = fields.String(
+        description="Name of source longitude column", required=True,
+    )
+    geohash = fields.String(
+        description="Name of target column for encoded geohash string", required=True,
+    )
+
+
+class ChartDataGeodeticParseOptionsSchema(
+    ChartDataPostProcessingOperationOptionsSchema
+):
+    """
+    Geodetic point string parsing operation config.
+    """
+
+    geodetic = fields.String(
+        description="Name of source column containing geodetic point strings",
+        required=True,
+    )
+    latitude = fields.String(
+        description="Name of target column for decoded latitude", required=True,
+    )
+    longitude = fields.String(
+        description="Name of target column for decoded longitude", required=True,
+    )
+    altitude = fields.String(
+        description="Name of target column for decoded altitude. If omitted, "
+        "altitude information in geodetic string is ignored.",
+    )
 
 
 class ChartDataPostProcessingOperationSchema(Schema):
@@ -340,12 +681,24 @@ class ChartDataPostProcessingOperationSchema(Schema):
         description="Post processing operation type",
         required=True,
         validate=validate.OneOf(
-            choices=("aggregate", "pivot", "rolling", "select", "sort")
+            choices=(
+                "aggregate",
+                "boxplot",
+                "contribution",
+                "cum",
+                "geodetic_parse",
+                "geohash_decode",
+                "geohash_encode",
+                "pivot",
+                "prophet",
+                "rolling",
+                "select",
+                "sort",
+            )
         ),
         example="aggregate",
     )
-    options = fields.Nested(
-        ChartDataPostProcessingOperationOptionsSchema,
+    options = fields.Dict(
         description="Options specifying how to perform the operation. Please refer "
         "to the respective post processing operation option schemas. "
         "For example, `ChartDataPostProcessingOperationOptions` specifies "
@@ -370,8 +723,8 @@ class ChartDataFilterSchema(Schema):
     )
     op = fields.String(  # pylint: disable=invalid-name
         description="The comparison operator.",
-        validate=validate.OneOf(
-            choices=[filter_op.value for filter_op in utils.FilterOperator]
+        validate=utils.OneOfCaseInsensitive(
+            choices=[filter_op.value for filter_op in FilterOperator]
         ),
         required=True,
         example="IN",
@@ -387,84 +740,147 @@ class ChartDataExtrasSchema(Schema):
 
     time_range_endpoints = fields.List(
         fields.String(
-            validate=validate.OneOf(choices=("INCLUSIVE", "EXCLUSIVE")),
+            validate=validate.OneOf(choices=("unknown", "inclusive", "exclusive")),
             description="A list with two values, stating if start/end should be "
             "inclusive/exclusive.",
-            required=False,
         )
     )
     relative_start = fields.String(
         description="Start time for relative time deltas. "
         'Default: `config["DEFAULT_RELATIVE_START_TIME"]`',
         validate=validate.OneOf(choices=("today", "now")),
-        required=False,
     )
     relative_end = fields.String(
         description="End time for relative time deltas. "
         'Default: `config["DEFAULT_RELATIVE_START_TIME"]`',
         validate=validate.OneOf(choices=("today", "now")),
-        required=False,
     )
     where = fields.String(
         description="WHERE clause to be added to queries using AND operator.",
-        required=False,
     )
     having = fields.String(
         description="HAVING clause to be added to aggregate queries using "
         "AND operator.",
-        required=False,
     )
     having_druid = fields.List(
         fields.Nested(ChartDataFilterSchema),
         description="HAVING filters to be added to legacy Druid datasource queries.",
-        required=False,
     )
     time_grain_sqla = fields.String(
         description="To what level of granularity should the temporal column be "
         "aggregated. Supports "
         "[ISO 8601](https://en.wikipedia.org/wiki/ISO_8601#Durations) durations.",
-        validate=validate.OneOf(
-            choices=(
-                "PT1S",
-                "PT1M",
-                "PT5M",
-                "PT10M",
-                "PT15M",
-                "PT0.5H",
-                "PT1H",
-                "P1D",
-                "P1W",
-                "P1M",
-                "P0.25Y",
-                "P1Y",
-            ),
-        ),
-        required=False,
+        validate=validate.OneOf(choices=TIME_GRAINS),
         example="P1D",
+        allow_none=True,
     )
     druid_time_origin = fields.String(
         description="Starting point for time grain counting on legacy Druid "
         "datasources. Used to change e.g. Monday/Sunday first-day-of-week.",
+        allow_none=True,
+    )
+
+
+class AnnotationLayerSchema(Schema):
+    annotationType = fields.String(
+        description="Type of annotation layer",
+        validate=validate.OneOf(choices=[ann.value for ann in AnnotationType]),
+    )
+    color = fields.String(description="Layer color", allow_none=True,)
+    descriptionColumns = fields.List(
+        fields.String(),
+        description="Columns to use as the description. If none are provided, "
+        "all will be shown.",
+    )
+    hideLine = fields.Boolean(
+        description="Should line be hidden. Only applies to line annotations",
+        allow_none=True,
+    )
+    intervalEndColumn = fields.String(
+        description=(
+            "Column containing end of interval. Only applies to interval layers"
+        ),
+        allow_none=True,
+    )
+    name = fields.String(description="Name of layer", required=True)
+    opacity = fields.String(
+        description="Opacity of layer",
+        validate=validate.OneOf(
+            choices=("", "opacityLow", "opacityMedium", "opacityHigh"),
+        ),
+        allow_none=True,
         required=False,
+    )
+    overrides = fields.Dict(
+        keys=fields.String(
+            desciption="Name of property to be overridden",
+            validate=validate.OneOf(
+                choices=("granularity", "time_grain_sqla", "time_range", "time_shift"),
+            ),
+        ),
+        values=fields.Raw(allow_none=True),
+        description="which properties should be overridable",
+        allow_none=True,
+    )
+    show = fields.Boolean(description="Should the layer be shown", required=True)
+    showMarkers = fields.Boolean(
+        description="Should markers be shown. Only applies to line annotations.",
+        required=True,
+    )
+    sourceType = fields.String(
+        description="Type of source for annotation data",
+        validate=validate.OneOf(choices=("", "line", "NATIVE", "table",)),
+    )
+    style = fields.String(
+        description="Line style. Only applies to time-series annotations",
+        validate=validate.OneOf(choices=("dashed", "dotted", "solid", "longDashed",)),
+    )
+    timeColumn = fields.String(
+        description="Column with event date or interval start date", allow_none=True,
+    )
+    titleColumn = fields.String(description="Column with title", allow_none=True,)
+    width = fields.Float(
+        description="Width of annotation line",
+        validate=[
+            Range(
+                min=0,
+                min_inclusive=True,
+                error=_("`width` must be greater or equal to 0"),
+            )
+        ],
+    )
+    value = fields.Raw(
+        description="For formula annotations, this contains the formula. "
+        "For other types, this is the primary key of the source object.",
+        required=True,
     )
 
 
 class ChartDataQueryObjectSchema(Schema):
+    annotation_layers = fields.List(
+        fields.Nested(AnnotationLayerSchema),
+        description="Annotation layers to apply to chart",
+        allow_none=True,
+    )
+    applied_time_extras = fields.Dict(
+        description="A mapping of temporal extras that have been applied to the query",
+        required=False,
+        example={"__time_range": "1 year ago : now"},
+    )
     filters = fields.List(fields.Nested(ChartDataFilterSchema), required=False)
     granularity = fields.String(
         description="Name of temporal column used for time filtering. For legacy Druid "
         "datasources this defines the time grain.",
-        required=False,
     )
     granularity_sqla = fields.String(
         description="Name of temporal column used for time filtering for SQL "
         "datasources. This field is deprecated, use `granularity` "
         "instead.",
-        required=False,
         deprecated=True,
     )
     groupby = fields.List(
         fields.String(description="Columns by which to group the query.",),
+        allow_none=True,
     )
     metrics = fields.List(
         fields.Raw(),
@@ -472,13 +888,11 @@ class ChartDataQueryObjectSchema(Schema):
         "references to datasource metrics (strings), or ad-hoc metrics"
         "which are defined only within the query object. See "
         "`ChartDataAdhocMetricSchema` for the structure of ad-hoc metrics.",
-        required=False,
     )
     post_processing = fields.List(
-        fields.Nested(ChartDataPostProcessingOperationSchema),
+        fields.Nested(ChartDataPostProcessingOperationSchema, allow_none=True),
         description="Post processing operations to be applied to the result set. "
         "Operations are applied to the result set in sequential order.",
-        required=False,
     )
     time_range = fields.String(
         description="A time rage, either expressed as a colon separated string "
@@ -499,57 +913,83 @@ class ChartDataQueryObjectSchema(Schema):
         "- No filter\n"
         "- Last X seconds/minutes/hours/days/weeks/months/years\n"
         "- Next X seconds/minutes/hours/days/weeks/months/years\n",
-        required=False,
         example="Last week",
     )
     time_shift = fields.String(
         description="A human-readable date/time string. "
         "Please refer to [parsdatetime](https://github.com/bear/parsedatetime) "
         "documentation for details on valid values.",
-        required=False,
     )
     is_timeseries = fields.Boolean(
         description="Is the `query_object` a timeseries.", required=False
     )
     timeseries_limit = fields.Integer(
         description="Maximum row count for timeseries queries. Default: `0`",
-        required=False,
+    )
+    timeseries_limit_metric = fields.Raw(
+        description="Metric used to limit timeseries queries by.", allow_none=True,
     )
     row_limit = fields.Integer(
-        description='Maximum row count. Default: `config["ROW_LIMIT"]`', required=False,
+        description='Maximum row count. Default: `config["ROW_LIMIT"]`',
+        validate=[
+            Range(min=1, error=_("`row_limit` must be greater than or equal to 1"))
+        ],
+    )
+    row_offset = fields.Integer(
+        description="Number of rows to skip. Default: `0`",
+        validate=[
+            Range(min=0, error=_("`row_offset` must be greater than or equal to 0"))
+        ],
     )
     order_desc = fields.Boolean(
         description="Reverse order. Default: `false`", required=False
     )
-    extras = fields.Nested(ChartDataExtrasSchema, required=False)
-    columns = fields.List(fields.String(), description="", required=False,)
+    extras = fields.Nested(
+        ChartDataExtrasSchema,
+        description="Extra parameters to add to the query.",
+        required=False,
+    )
+    columns = fields.List(
+        fields.String(),
+        description="Columns which to select in the query.",
+        allow_none=True,
+    )
     orderby = fields.List(
         fields.List(fields.Raw()),
         description="Expects a list of lists where the first element is the column "
-        "name which to sort by, and the second element is a boolean ",
-        required=False,
+        "name which to sort by, and the second element is a boolean.",
         example=[["my_col_1", False], ["my_col_2", True]],
     )
     where = fields.String(
         description="WHERE clause to be added to queries using AND operator."
         "This field is deprecated and should be passed to `extras`.",
-        required=False,
         deprecated=True,
     )
     having = fields.String(
         description="HAVING clause to be added to aggregate queries using "
         "AND operator. This field is deprecated and should be passed "
         "to `extras`.",
-        required=False,
         deprecated=True,
     )
     having_filters = fields.List(
-        fields.Dict(),
+        fields.Nested(ChartDataFilterSchema),
         description="HAVING filters to be added to legacy Druid datasource queries. "
         "This field is deprecated and should be passed to `extras` "
-        "as `filters_druid`.",
-        required=False,
+        "as `having_druid`.",
         deprecated=True,
+    )
+    druid_time_origin = fields.String(
+        description="Starting point for time grain counting on legacy Druid "
+        "datasources. Used to change e.g. Monday/Sunday first-day-of-week. "
+        "This field is deprecated and should be passed to `extras` "
+        "as `druid_time_origin`.",
+        allow_none=True,
+    )
+    url_params = fields.Dict(
+        description="Optional query parameters passed to a dashboard or Explore view",
+        keys=fields.String(description="The query parameter"),
+        values=fields.String(description="The value of the query parameter"),
+        allow_none=True,
     )
 
 
@@ -565,17 +1005,50 @@ class ChartDataDatasourceSchema(Schema):
 class ChartDataQueryContextSchema(Schema):
     datasource = fields.Nested(ChartDataDatasourceSchema)
     queries = fields.List(fields.Nested(ChartDataQueryObjectSchema))
+    force = fields.Boolean(
+        description="Should the queries be forced to load from the source. "
+        "Default: `false`",
+    )
+    result_type = fields.String(
+        description="Type of results to return",
+        validate=validate.OneOf(choices=("full", "query", "results", "samples")),
+    )
+    result_format = fields.String(
+        description="Format of result payload",
+        validate=validate.OneOf(choices=("json", "csv")),
+    )
 
-    # pylint: disable=no-self-use
+    # pylint: disable=no-self-use,unused-argument
     @post_load
-    def make_query_context(self, data: Dict[str, Any]) -> QueryContext:
+    def make_query_context(self, data: Dict[str, Any], **kwargs: Any) -> QueryContext:
         query_context = QueryContext(**data)
         return query_context
 
-    # pylint: enable=no-self-use
+    # pylint: enable=no-self-use,unused-argument
+
+
+class AnnotationDataSchema(Schema):
+    columns = fields.List(
+        fields.String(),
+        description="columns available in the annotation result",
+        required=True,
+    )
+    records = fields.List(
+        fields.Dict(keys=fields.String(),),
+        description="records mapping the column name to it's value",
+        required=True,
+    )
 
 
 class ChartDataResponseResult(Schema):
+    annotation_data = fields.List(
+        fields.Dict(
+            keys=fields.String(description="Annotation layer name"),
+            values=fields.String(),
+        ),
+        description="All requested annotation data",
+        allow_none=True,
+    )
     cache_key = fields.String(
         description="Unique cache key for query object", required=True, allow_none=True,
     )
@@ -617,6 +1090,12 @@ class ChartDataResponseResult(Schema):
         description="Amount of rows in result set", allow_none=False,
     )
     data = fields.List(fields.Dict(), description="A list with results")
+    applied_filters = fields.List(
+        fields.Dict(), description="A list with applied filters"
+    )
+    rejected_filters = fields.List(
+        fields.Dict(), description="A list with rejected filters"
+    )
 
 
 class ChartDataResponseSchema(Schema):
@@ -626,16 +1105,60 @@ class ChartDataResponseSchema(Schema):
     )
 
 
-CHART_DATA_SCHEMAS = (
+class ChartDataAsyncResponseSchema(Schema):
+    channel_id = fields.String(
+        description="Unique session async channel ID", allow_none=False,
+    )
+    job_id = fields.String(description="Unique async job ID", allow_none=False,)
+    user_id = fields.String(description="Requesting user ID", allow_none=True,)
+    status = fields.String(description="Status value for async job", allow_none=False,)
+    result_url = fields.String(
+        description="Unique result URL for fetching async query data", allow_none=False,
+    )
+
+
+class ChartFavStarResponseResult(Schema):
+    id = fields.Integer(description="The Chart id")
+    value = fields.Boolean(description="The FaveStar value")
+
+
+class GetFavStarIdsSchema(Schema):
+    result = fields.List(
+        fields.Nested(ChartFavStarResponseResult),
+        description="A list of results for each corresponding chart in the request",
+    )
+
+
+class ImportV1ChartSchema(Schema):
+    slice_name = fields.String(required=True)
+    viz_type = fields.String(required=True)
+    params = fields.Dict()
+    cache_timeout = fields.Integer(allow_none=True)
+    uuid = fields.UUID(required=True)
+    version = fields.String(required=True)
+    dataset_uuid = fields.UUID(required=True)
+
+
+CHART_SCHEMAS = (
     ChartDataQueryContextSchema,
     ChartDataResponseSchema,
+    ChartDataAsyncResponseSchema,
     # TODO: These should optimally be included in the QueryContext schema as an `anyOf`
     #  in ChartDataPostPricessingOperation.options, but since `anyOf` is not
     #  by Marshmallow<3, this is not currently possible.
     ChartDataAdhocMetricSchema,
     ChartDataAggregateOptionsSchema,
+    ChartDataContributionOptionsSchema,
+    ChartDataProphetOptionsSchema,
+    ChartDataBoxplotOptionsSchema,
     ChartDataPivotOptionsSchema,
     ChartDataRollingOptionsSchema,
     ChartDataSelectOptionsSchema,
     ChartDataSortOptionsSchema,
+    ChartDataGeohashDecodeOptionsSchema,
+    ChartDataGeohashEncodeOptionsSchema,
+    ChartDataGeodeticParseOptionsSchema,
+    ChartGetDatasourceResponseSchema,
+    ChartCacheScreenshotResponseSchema,
+    GetFavStarIdsSchema,
 )

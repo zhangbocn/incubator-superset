@@ -14,36 +14,63 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from flask_babel import gettext as _
+
+from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 
 
 class SupersetException(Exception):
     status = 500
     message = ""
 
-    def __init__(self, message: str = "", exception: Optional[Exception] = None):
+    def __init__(
+        self, message: str = "", exception: Optional[Exception] = None,
+    ) -> None:
         if message:
             self.message = message
         self._exception = exception
         super().__init__(self.message)
 
     @property
-    def exception(self):
+    def exception(self) -> Optional[Exception]:
         return self._exception
 
 
 class SupersetTimeoutException(SupersetException):
-    pass
+    status = 408
+
+    def __init__(
+        self,
+        error_type: SupersetErrorType,
+        message: str,
+        level: ErrorLevel,
+        extra: Optional[Dict[str, Any]],
+    ) -> None:
+        super(SupersetTimeoutException, self).__init__(message)
+        self.error = SupersetError(
+            error_type=error_type, message=message, level=level, extra=extra
+        )
 
 
 class SupersetSecurityException(SupersetException):
     status = 401
 
-    def __init__(self, msg: str, link: Optional[str] = None) -> None:
-        super(SupersetSecurityException, self).__init__(msg)
-        self.link = link
+    def __init__(
+        self, error: SupersetError, payload: Optional[Dict[str, Any]] = None
+    ) -> None:
+        super(SupersetSecurityException, self).__init__(error.message)
+        self.error = error
+        self.payload = payload
+
+
+class SupersetVizException(SupersetException):
+    status = 400
+
+    def __init__(self, errors: List[SupersetError]) -> None:
+        super(SupersetVizException, self).__init__(str(errors))
+        self.errors = errors
 
 
 class NoDataException(SupersetException):
@@ -72,3 +99,15 @@ class DatabaseNotFound(SupersetException):
 
 class QueryObjectValidationError(SupersetException):
     status = 400
+
+
+class CacheLoadError(SupersetException):
+    status = 404
+
+
+class DashboardImportException(SupersetException):
+    pass
+
+
+class SerializationError(SupersetException):
+    pass

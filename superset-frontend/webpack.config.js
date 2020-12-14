@@ -43,8 +43,11 @@ const {
   devserverPort = 9000,
   measure = false,
   analyzeBundle = false,
+  analyzerPort = 8888,
+  nameChunks = false,
 } = parsedArgs;
 const isDevMode = mode !== 'production';
+const isDevServer = process.argv[1].includes('webpack-dev-server');
 
 const output = {
   path: BUILD_DIR,
@@ -53,9 +56,12 @@ const output = {
 if (isDevMode) {
   output.filename = '[name].[hash:8].entry.js';
   output.chunkFilename = '[name].[hash:8].chunk.js';
-} else {
+} else if (nameChunks) {
   output.filename = '[name].[chunkhash].entry.js';
   output.chunkFilename = '[name].[chunkhash].chunk.js';
+} else {
+  output.filename = '[name].[chunkhash].entry.js';
+  output.chunkFilename = '[chunkhash].chunk.js';
 }
 
 const plugins = [
@@ -73,7 +79,7 @@ const plugins = [
       //   }
       // }
       const entryFiles = {};
-      for (const [entry, chunks] of Object.entries(entrypoints)) {
+      Object.entries(entrypoints).forEach(([entry, chunks]) => {
         entryFiles[entry] = {
           css: chunks
             .filter(x => x.endsWith('.css'))
@@ -82,23 +88,16 @@ const plugins = [
             .filter(x => x.endsWith('.js'))
             .map(x => path.join(output.publicPath, x)),
         };
-      }
+      });
+
       return {
         ...seed,
         entrypoints: entryFiles,
       };
     },
-    // Also write to disk when using devServer
-    // instead of only keeping manifest.json in memory
-    // This is required to make devServer work with flask.
-    writeToFileEmit: isDevMode,
-  }),
-
-  // create fresh dist/ upon build
-  new CleanWebpackPlugin({
-    dry: false,
-    // required because the build directory is outside the frontend directory:
-    dangerouslyAllowCleanPatternsOutsideProject: true,
+    // Also write maniafest.json to disk when running `npm run dev`.
+    // This is required for Flask to work.
+    writeToFileEmit: isDevMode && !isDevServer,
   }),
 
   // expose mode variable to other modules
@@ -112,15 +111,29 @@ const plugins = [
     checkSyntacticErrors: true,
   }),
 
-  new CopyPlugin(
-    [
+  new CopyPlugin({
+    patterns: [
       'package.json',
       { from: 'images', to: 'images' },
       { from: 'stylesheets', to: 'stylesheets' },
     ],
-    { copyUnmodified: true },
-  ),
+  }),
 ];
+
+if (!process.env.CI) {
+  plugins.push(new webpack.ProgressPlugin());
+}
+
+// clean up built assets if not from dev-server
+if (!isDevServer) {
+  plugins.push(
+    new CleanWebpackPlugin({
+      // required because the build directory is outside the frontend directory:
+      dangerouslyAllowCleanPatternsOutsideProject: true,
+    }),
+  );
+}
+
 if (!isDevMode) {
   // text loading (webpack 4+)
   plugins.push(
@@ -132,9 +145,9 @@ if (!isDevMode) {
   plugins.push(new OptimizeCSSAssetsPlugin());
 }
 
-const PREAMBLE = [path.join(APP_DIR, '/src/preamble.js')];
+const PREAMBLE = [path.join(APP_DIR, '/src/preamble.ts')];
 if (isDevMode) {
-  // A Superset webpage normally includes two JS bundles in dev, `theme.js` and
+  // A Superset webpage normally includes two JS bundles in dev, `theme.ts` and
   // the main entrypoint. Only the main entry should have the dev server client,
   // otherwise the websocket client will initialize twice, creating two sockets.
   // Ref: https://github.com/gaearon/react-hot-loader/issues/141
@@ -155,6 +168,15 @@ const babelLoader = {
     // faster when there are millions of small files
     cacheCompression: false,
     plugins: ['emotion'],
+    presets: [
+      [
+        '@emotion/babel-preset-css-prop',
+        {
+          autoLabel: true,
+          labelFormat: '[local]',
+        },
+      ],
+    ],
   },
 };
 
@@ -163,14 +185,15 @@ const config = {
     fs: 'empty',
   },
   entry: {
-    theme: path.join(APP_DIR, '/src/theme.js'),
+    theme: path.join(APP_DIR, '/src/theme.ts'),
     preamble: PREAMBLE,
-    addSlice: addPreamble('/src/addSlice/index.jsx'),
+    addSlice: addPreamble('/src/addSlice/index.tsx'),
     explore: addPreamble('/src/explore/index.jsx'),
     dashboard: addPreamble('/src/dashboard/index.jsx'),
-    sqllab: addPreamble('/src/SqlLab/index.jsx'),
-    welcome: addPreamble('/src/welcome/index.jsx'),
-    profile: addPreamble('/src/profile/index.jsx'),
+    sqllab: addPreamble('/src/SqlLab/index.tsx'),
+    crudViews: addPreamble('/src/views/index.tsx'),
+    menu: addPreamble('src/views/menu.tsx'),
+    profile: addPreamble('/src/profile/index.tsx'),
     showSavedQuery: [path.join(APP_DIR, '/src/showSavedQuery/index.jsx')],
   },
   output,
@@ -182,24 +205,84 @@ const config = {
     },
   },
   optimization: {
+    sideEffects: true,
     splitChunks: {
       chunks: 'all',
+      // increase minSize for devMode to 1000kb because of sourcemap
+      minSize: isDevMode ? 1000000 : 20000,
+      name: nameChunks,
       automaticNameDelimiter: '-',
       minChunks: 2,
       cacheGroups: {
-        default: false,
-        major: {
-          name: 'vendors-major',
-          test: /\/node_modules\/(brace|react|react-dom|@superset-ui\/translation|webpack.*|@babel.*)\//,
+        automaticNamePrefix: 'chunk',
+        // basic stable dependencies
+        vendors: {
+          priority: 50,
+          name: 'vendors',
+          test: new RegExp(
+            `/node_modules/(${[
+              'abortcontroller-polyfill',
+              'react',
+              'react-dom',
+              'prop-types',
+              'react-prop-types',
+              'prop-types-extra',
+              'redux',
+              'react-redux',
+              'react-hot-loader',
+              'react-select',
+              'react-sortable-hoc',
+              'react-virtualized',
+              'react-table',
+              'react-ace',
+              '@hot-loader.*',
+              'webpack.*',
+              '@?babel.*',
+              'lodash.*',
+              'antd',
+              '@ant-design.*',
+              '.*bootstrap',
+              'react-bootstrap-slider',
+              'moment',
+              'jquery',
+              'core-js.*',
+              '@emotion.*',
+              'd3',
+              'd3-(array|color|scale|interpolate|format|selection|collection|time|time-format)',
+            ].join('|')})/`,
+          ),
+        },
+        // bundle large libraries separately
+        mathjs: {
+          name: 'mathjs',
+          test: /\/node_modules\/mathjs\//,
+          priority: 30,
+          enforce: true,
+        },
+        // viz thumbnails are used in `addSlice` and `explore` page
+        thumbnail: {
+          name: 'thumbnail',
+          test: /thumbnail(Large)?\.png/i,
+          priority: 20,
+          enforce: true,
         },
       },
     },
   },
   resolve: {
+    modules: [APP_DIR, 'node_modules'],
     alias: {
-      src: path.resolve(APP_DIR, './src'),
       'react-dom': '@hot-loader/react-dom',
-      stylesheets: path.resolve(APP_DIR, './stylesheets'),
+      // force using absolute import path of the @superset-ui/core and @superset-ui/chart-controls
+      // so that we can `npm link` viz plugins without linking these two base packages
+      '@superset-ui/core': path.resolve(
+        APP_DIR,
+        './node_modules/@superset-ui/core',
+      ),
+      '@superset-ui/chart-controls': path.resolve(
+        APP_DIR,
+        './node_modules/@superset-ui/chart-controls',
+      ),
     },
     extensions: ['.ts', '.tsx', '.js', '.jsx'],
     symlinks: false,
@@ -216,6 +299,7 @@ const config = {
       },
       {
         test: /\.tsx?$/,
+        exclude: [/\.test.tsx?$/],
         use: [
           'thread-loader',
           babelLoader,
@@ -241,9 +325,13 @@ const config = {
       },
       {
         test: /\.jsx?$/,
-        // include source code for plugins, but exclude node_modules within them
-        exclude: [/superset-ui.*\/node_modules\//],
-        include: [new RegExp(`${APP_DIR}/src`), /superset-ui.*\/src/],
+        // include source code for plugins, but exclude node_modules and test files within them
+        exclude: [/superset-ui.*\/node_modules\//, /\.test.jsx?$/],
+        include: [
+          new RegExp(`${APP_DIR}/src`),
+          /superset-ui.*\/src/,
+          new RegExp(`${APP_DIR}/.storybook`),
+        ],
         use: [babelLoader],
       },
       {
@@ -274,11 +362,12 @@ const config = {
             loader: 'less-loader',
             options: {
               sourceMap: isDevMode,
+              javascriptEnabled: true,
             },
           },
         ],
       },
-      /* for css linking images */
+      /* for css linking images (and viz plugin thumbnails) */
       {
         test: /\.png$/,
         loader: 'url-loader',
@@ -286,6 +375,13 @@ const config = {
           limit: 10000,
           name: '[name].[hash:8].[ext]',
         },
+      },
+      {
+        test: /\.svg(\?v=\d+\.\d+\.\d+)?$/,
+        issuer: {
+          test: /\.(j|t)sx?$/,
+        },
+        use: ['@svgr/webpack'],
       },
       {
         test: /\.(jpg|gif)$/,
@@ -298,10 +394,16 @@ const config = {
       {
         test: /\.woff(2)?(\?v=[0-9]\.[0-9]\.[0-9])?$/,
         loader: 'url-loader?limit=10000&mimetype=application/font-woff',
+        options: {
+          esModule: false,
+        },
       },
       {
         test: /\.(ttf|eot|svg)(\?v=[0-9]\.[0-9]\.[0-9])?$/,
         loader: 'file-loader',
+        options: {
+          esModule: false,
+        },
       },
     ],
   },
@@ -347,7 +449,7 @@ if (isDevMode) {
 
   // find all the symlinked plugins and use their source code for imports
   let hasSymlink = false;
-  for (const [pkg, version] of Object.entries(packageConfig.dependencies)) {
+  Object.entries(packageConfig.dependencies).forEach(([pkg, version]) => {
     const srcPath = `./node_modules/${pkg}/src`;
     if (/superset-ui/.test(pkg) && fs.existsSync(srcPath)) {
       console.log(
@@ -358,7 +460,7 @@ if (isDevMode) {
       config.resolve.alias[`${pkg}$`] = `${pkg}/src`;
       hasSymlink = true;
     }
-  }
+  });
   if (hasSymlink) {
     console.log(''); // pure cosmetic new line
   }
@@ -376,7 +478,7 @@ if (isDevMode) {
 // Pass flag --analyzeBundle=true to enable
 // e.g. npm run build -- --analyzeBundle=true
 if (analyzeBundle) {
-  config.plugins.push(new BundleAnalyzerPlugin());
+  config.plugins.push(new BundleAnalyzerPlugin({ analyzerPort }));
 }
 
 // Speed measurement is disabled by default
